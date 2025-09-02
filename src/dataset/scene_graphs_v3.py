@@ -17,6 +17,8 @@ path_graphs = f'{path}/graphs'
 cached_graph = f'{path}/cached_graphs'
 cached_desc = f'{path}/cached_desc'
 
+NUM_NEG_PER_POS = 0.6
+
 
 def extract_nodes_edges(desc: str):
     lines = [ln.strip() for ln in desc.strip().split('\n') if ln.strip()]
@@ -151,7 +153,7 @@ class SceneGraphsDataset(Dataset):
         negative_edges_set = list(all_edges_set - existing_edges_set)
 
         # 每个正样本配n个负样本
-        num_negative_per_positive = 1
+        num_negative_per_positive = NUM_NEG_PER_POS
         num_negative_samples = int(num_negative_per_positive * len(positive_edge_index))
         # num_negative_samples = len(positive_edge_index) // 2
 
