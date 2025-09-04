@@ -17,7 +17,7 @@ path_graphs = f'{path}/graphs'
 cached_graph = f'{path}/cached_graphs'
 cached_desc = f'{path}/cached_desc'
 
-NUM_NEG_PER_POS = 0.6
+NUM_NEG_PER_POS = 0.4
 
 
 def extract_nodes_edges(desc: str):

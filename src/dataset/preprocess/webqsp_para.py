@@ -7,13 +7,13 @@ from datasets import load_dataset, concatenate_datasets
 from torch_geometric.data import Data
 from src.utils.lm_modeling import load_model, load_text2embedding
 
-
 model_name = 'sbert'
 path = 'dataset/webqsp'
 # path = '/opt/dlami/nvme/cache/dataset/webqsp'
 path_nodes = f'{path}/nodes'
 path_edges = f'{path}/edges'
 path_graphs = f'{path}/graphs'
+
 
 def remove_repeated_edges_tensor(data):
     edge_list = list(zip(data.edge_index[0].tolist(), data.edge_index[1].tolist()))
@@ -23,13 +23,14 @@ def remove_repeated_edges_tensor(data):
             edge_dict[edge].append(idx)  # Store original indices of duplicates
         else:
             edge_dict[edge] = [idx]  # Start a list with the current index
-    
+
     filtered_indices = [idxs[0] for idxs in edge_dict.values() if len(idxs) == 1]
     data.edge_index = data.edge_index[:, filtered_indices]
     if data.edge_attr is not None:
         data.edge_attr = data.edge_attr[filtered_indices]
 
     return data
+
 
 def step_one():
     dataset = load_dataset("rmanluo/RoG-webqsp")
@@ -50,7 +51,8 @@ def step_one():
             if t not in nodes:
                 nodes[t] = len(nodes)
             edges.append({'src': nodes[h], 'edge_attr': r, 'dst': nodes[t]})
-        nodes = pd.DataFrame([{'node_id': v, 'node_attr': k} for k, v in nodes.items()], columns=['node_id', 'node_attr'])
+        nodes = pd.DataFrame([{'node_id': v, 'node_attr': k} for k, v in nodes.items()],
+                             columns=['node_id', 'node_attr'])
         edges = pd.DataFrame(edges, columns=['src', 'edge_attr', 'dst'])
 
         nodes.to_csv(f'{path_nodes}/{i}.csv', index=False)
@@ -58,7 +60,6 @@ def step_one():
 
 
 def generate_split():
-    
     dataset = load_dataset("rmanluo/RoG-webqsp")
 
     train_indices = np.arange(len(dataset['train']))
@@ -132,11 +133,25 @@ def step_two_parallel():
         p.join()
 
 
+def encode_question():
+    dataset = load_dataset("rmanluo/RoG-webqsp")
+    dataset = concatenate_datasets([dataset['train'], dataset['validation'], dataset['test']])
+    questions = [i['question'] for i in dataset]
+
+    model, tokenizer, device = load_model[model_name]()
+    text2embedding = load_text2embedding[model_name]
+
+    # encode questions
+    print('Encoding questions...')
+    q_embs = text2embedding(model, tokenizer, device, questions)
+    torch.save(q_embs, f'{path}/q_embs.pt')
 
 
 if __name__ == '__main__':
     import torch.multiprocessing as mp
+
     mp.set_start_method('spawn', force=True)
     step_one()
+    encode_question()
     step_two_parallel()
     generate_split()

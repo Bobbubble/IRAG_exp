@@ -21,65 +21,9 @@ path_graphs = f'{path}/graphs'
 cached_graph = f'{path}/cached_graphs'
 cached_desc = f'{path}/cached_desc'
 
+NUM_NEG_PER_POS = 0.5
 
-def extract_nodes_edges(desc: str):
-    lines = [ln.strip() for ln in desc.strip().split('\n') if ln.strip()]
-
-    subgraphs = []
-    current_mode = None
-    current_nodes, current_edges = [], []
-
-    def flush():
-        nonlocal current_nodes, current_edges
-        subgraphs.append({"nodes": current_nodes, "edges": current_edges})
-        current_nodes, current_edges = [], []
-
-    for line in lines:
-        if line == "node_id,node_attr":
-            if current_nodes or current_edges:
-                flush()
-            current_mode = "node"
-        elif line == "src,edge_attr,dst":
-            current_mode = "edge"
-        else:
-            if current_mode == "node":
-                current_nodes.append(line)
-            elif current_mode == "edge":
-                current_edges.append(line)
-
-    if current_nodes or current_edges:
-        flush()
-
-    global_nodes = []  # (idx, node_attr)
-    global_edges = []  # (src_idx, edge_attr, dst_idx)
-    offset = 0
-
-    for sg in subgraphs:
-        local = []
-        for ln in sg["nodes"]:
-            left, right = ln.split(",", 1)
-            orig_id = int(left.strip())
-            node_attr = right.strip()
-            local.append((orig_id, node_attr))
-
-        orig2g = {}
-        for local_idx, (orig_id, node_attr) in enumerate(local):
-            gidx = offset + local_idx
-            orig2g[orig_id] = gidx
-            global_nodes.append((gidx, node_attr))
-
-        for ln in sg["edges"]:
-            src, edge_attr, dst = ln.split(",", 2)
-            src_idx = orig2g[int(src.strip())]
-            dst_idx = orig2g[int(dst.strip())]
-            global_edges.append((src_idx, edge_attr.strip(), dst_idx))
-
-        offset += len(local)
-
-    node_df = pd.DataFrame(global_nodes, columns=["node_id", "node_attr"])
-    edge_df = pd.DataFrame(global_edges, columns=["src", "edge_attr", "dst"])
-    return node_df, edge_df
-
+import pandas as pd
 
 class WebQSPDataset(Dataset):
     def __init__(self):
@@ -100,9 +44,12 @@ class WebQSPDataset(Dataset):
         data = self.dataset[index]
         question = f'Question: {data["question"]}\nAnswer: '
         graph = torch.load(f'{cached_graph}/{index}.pt')
+        # graph = torch.load(f'{path_graphs}/{index}.pt')
         desc = open(f'{cached_desc}/{index}.txt', 'r').read()
         label = ('|').join(data['answer']).lower()
-        nodes, edges = extract_nodes_edges(desc)
+        # nodes, edges = extract_nodes_edges(desc)
+        nodes = pd.read_csv(f'{path}/nodes/{index}.csv')
+        edges = pd.read_csv(f'{path}/edges/{index}.csv')
 
         # -------------------------带mask----------------------------
         # 保留 nodes 和 edges dataframe，后面desc动态生成
@@ -126,6 +73,8 @@ class WebQSPDataset(Dataset):
         existing_edges_text = {(row.src, row.dst): row.edge_attr for _, row in edges.iterrows()}
         existing_edges_attr = {(u.item(), v.item()): edge_attr[idx] for idx, (u, v) in enumerate(graph.edge_index.t())}
 
+        # print(f'existing_edges_text:{existing_edges_text}')
+
         # 构建正样本
         positive_edge_index = []
         positive_edge_attr = []
@@ -134,24 +83,28 @@ class WebQSPDataset(Dataset):
 
         existing_edges_list = list(existing_edges_set)
         # 当正样本数量大于 max的时候，只取max，让LLM只学一部分内容
-        # max_positive = 200
-        # if len(existing_edges_list) > max_positive:
-        #     existing_edges_list = random.sample(existing_edges_list, max_positive)
+        max_positive = 100
+        if len(existing_edges_list) > max_positive:
+            existing_edges_list = random.sample(existing_edges_list, max_positive)
 
         # for (u, v) in existing_edges_set:
         for (u, v) in existing_edges_list:
+            if (u, v) not in existing_edges_text:
+                continue
             positive_edge_index.append((u, v))
             positive_edge_attr.append(existing_edges_attr[(u, v)])
             positive_edge_text.append(existing_edges_text.get((u, v), ''))
             positive_labels.append(1)
+
+        # print(f'positive_edge_text:{positive_edge_text}')
 
         # 构建负样本
         all_edges_set = set((u.item(), v.item()) for u, v in candidate_edge_index.t())
         negative_edges_set = list(all_edges_set - existing_edges_set)
 
         # 每个正样本配n个负样本
-        num_negative_per_positive = 1
-        num_negative_samples = num_negative_per_positive * len(positive_edge_index)
+        num_negative_per_positive = NUM_NEG_PER_POS
+        num_negative_samples = int(num_negative_per_positive * len(positive_edge_index))
         # num_negative_samples = len(positive_edge_index) // 2
 
         if len(negative_edges_set) > num_negative_samples:
@@ -222,11 +175,13 @@ class EdgePairDataset(Dataset):
         super().__init__()
         self.base_dataset = WebQSPDataset()
         self.samples = []
+        self.cache = {}
         self.idx_split = idx_split if idx_split else self.base_dataset.get_idx_split()
 
         if idx_split:
             for idx in self.idx_split:
                 item = self.base_dataset[idx]
+                self.cache[idx] = item
                 for edge_idx in range(item['candidate_edge_index'].shape[1]):
                     self.samples.append((idx, edge_idx))
 
@@ -234,8 +189,10 @@ class EdgePairDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, index):
+
         graph_idx, edge_idx = self.samples[index]
-        item = self.base_dataset[graph_idx]
+        # item = self.base_dataset[graph_idx]
+        item = self.cache[graph_idx]
 
         src = item['candidate_edge_index'][0, edge_idx]
         dst = item['candidate_edge_index'][1, edge_idx]
