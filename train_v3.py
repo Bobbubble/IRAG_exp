@@ -18,6 +18,7 @@ from collections import defaultdict
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 device0 = torch.device("cuda:0")
+device1 = torch.device("cuda:1")
 
 graph_cache = defaultdict(lambda: {
     'completion_loss': [],
@@ -125,10 +126,12 @@ def main(args):
     test_loader = DataLoader(test_dataset, batch_size=args.eval_batch_size, drop_last=False, pin_memory=True,
                              shuffle=False, collate_fn=collate_fn)
 
+    print(f'***finish loader')
+
     # Step 3: Build Model
     args.llm_model_path = llama_model_path[args.llm_model_name]
-    completion_model = load_model[args.completion_model_name](args=args)
-    lp_model = load_model[args.lp_model_name](args=args).to(device)
+    completion_model = load_model[args.completion_model_name](args=args).to(device1)
+    lp_model = load_model[args.lp_model_name](args=args).to(device0)
 
     # Step 4 Set Optimizer
     params = list(p for p in completion_model.parameters() if p.requires_grad) + \
@@ -165,7 +168,7 @@ def main(args):
             total_lp_loss = 0.0
             completion_loss, pred_attr = completion_model(batch, return_attr=True)
             batch = update_sample(batch, pred_attr, 'train')
-            lp_loss = lp_model(batch).to("cuda:1")
+            lp_loss = lp_model(batch).to(device1)
             total_loss = completion_loss + lp_loss
             batch_loss += total_loss
             # ----------------batch版本--------------------------------------
@@ -223,7 +226,7 @@ def main(args):
                 # ----------------batch版本--------------------------------------
                 completion_loss, pred_attr = completion_model(batch, return_attr=True)
                 batch = update_sample(batch, pred_attr, 'train')
-                lp_loss = lp_model(batch).to("cuda:1")
+                lp_loss = lp_model(batch).to(device1)
                 total_loss = completion_loss + lp_loss
                 val_loss += total_loss.item()
                 # ----------------batch版本--------------------------------------
